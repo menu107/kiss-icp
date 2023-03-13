@@ -5,7 +5,7 @@
   <arg name="visualize" default="true"/>
   <arg name="odom_frame" default="odom"/>
   <arg name="child_frame" default="base_link"/>
-  <arg name="topic" default=""/>
+  <arg name="topic" default="/os_cloud_node/points"/>
 
   <!-- KISS-ICP paramaters -->
   <arg name="deskew" default="false"/>

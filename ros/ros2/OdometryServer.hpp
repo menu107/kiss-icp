@@ -30,7 +30,9 @@
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 #include "tf2_ros/transform_broadcaster.h"
+#include "raptor_dbw_msgs/msg/wheel_speed_report.hpp"
 
 namespace kiss_icp_ros {
 
@@ -42,7 +44,9 @@ public:
 private:
     /// Register new frame
     void RegisterFrame(const sensor_msgs::msg::PointCloud2::SharedPtr msg_ptr);
-
+    void ImuIntegration(const sensor_msgs::msg::Imu &msg);
+    void ImuHandler(const sensor_msgs::msg::Imu::SharedPtr msg_ptr);
+    void WheelSpeedHandler(const raptor_dbw_msgs::msg::WheelSpeedReport::SharedPtr msg_ptr);
 private:
     /// Ros node stuff
     size_t queue_size_{1};
@@ -52,6 +56,8 @@ private:
 
     /// Data subscribers.
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<raptor_dbw_msgs::msg::WheelSpeedReport>::SharedPtr wheelspeed_sub_;
 
     /// Data publishers.
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_;
@@ -70,6 +76,16 @@ private:
     /// Global/map coordinate frame.
     std::string odom_frame_{"odom"};
     std::string child_frame_{"base_link"};
+
+    double imu_last_update = 0.0;
+    bool is_firstcall = true;
+    bool is_points = false;
+
+    double m_velocity_x = 0.0;
+
+    Eigen::Vector3d avg_acc = {0.0,0.0,0.0};
+    Eigen::Vector3d avg_gyro = {0.0,0.0,0.0};
+
 };
 
 }  // namespace kiss_icp_ros

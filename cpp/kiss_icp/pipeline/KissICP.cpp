@@ -22,7 +22,7 @@
 // SOFTWARE.
 
 #include "KissICP.hpp"
-
+#include <iostream>
 #include <Eigen/Core>
 #include <tuple>
 #include <vector>
@@ -63,8 +63,17 @@ KissICP::Vector3dVectorTuple KissICP::RegisterFrame(const std::vector<Eigen::Vec
     const double sigma = GetAdaptiveThreshold();
 
     // Compute initial_guess for ICP
-    const auto prediction = GetPredictionModel();
+    Sophus::SE3d prediction;
+    if(imu_initial_guess_updated)prediction =GetPredictionModelwithIMU();
+    else prediction =GetPredictionModel();
+
+    // const auto prediction = GetPredictionModel();
+
     const auto last_pose = !poses_.empty() ? poses_.back() : Sophus::SE3d();
+
+    // std::cout << "Last pose translation: " << last_pose.translation().transpose() << std::endl;
+    // std::cout << "Last pose rotation matrix: " << std::endl << last_pose.rotationMatrix() << std::endl;
+
     const auto initial_guess = last_pose * prediction;
 
     // Run icp
@@ -105,6 +114,11 @@ bool KissICP::HasMoved() {
     if (poses_.empty()) return false;
     const double motion = (poses_.front().inverse() * poses_.back()).translation().norm();
     return motion > 5.0 * config_.min_motion_th;
+}
+
+Sophus::SE3d KissICP::GetPredictionModelwithIMU() {
+    imu_initial_guess_updated = false;
+    return imu_initial_guess;
 }
 
 }  // namespace kiss_icp::pipeline

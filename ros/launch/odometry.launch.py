@@ -38,15 +38,18 @@ def generate_launch_description():
     return LaunchDescription(
         [
             # ROS2 parameters
-            DeclareLaunchArgument("topic", description="sensor_msg/PointCloud2 topic to process"),
+            DeclareLaunchArgument("pointcloud_topic", default_value="/rslidar_points_dx", description="sensor_msg/PointCloud2 topic to process"),
+            # DeclareLaunchArgument("pointcloud_topic", default_value="/merged_points", description="sensor_msg/PointCloud2 topic to process"),
+            DeclareLaunchArgument("imu_topic", default_value="/novatel_bottom/rawimux", description="sensor_msg/Imu topic to process"),
+            DeclareLaunchArgument("wheelspeed_topic", default_value="/raptor_dbw_interface/wheel_speed_report", description="raptor_dbw_msgs/wheelspeedreport topic to process"),
             DeclareLaunchArgument("bagfile", default_value=""),
             DeclareLaunchArgument("visualize", default_value="true"),
             DeclareLaunchArgument("odom_frame", default_value="odom"),
             DeclareLaunchArgument("child_frame", default_value="base_link"),
             # KISS-ICP parameters
             DeclareLaunchArgument("deskew", default_value="false"),
-            DeclareLaunchArgument("max_range", default_value="100.0"),
-            DeclareLaunchArgument("min_range", default_value="5.0"),
+            DeclareLaunchArgument("max_range", default_value="200.0"),
+            DeclareLaunchArgument("min_range", default_value="3.0"),
             # This thing is still not suported: https://github.com/ros2/launch/issues/290#issuecomment-1438476902
             #  DeclareLaunchArgument("voxel_size", default_value=None),
             Node(
@@ -54,7 +57,7 @@ def generate_launch_description():
                 executable="odometry_node",
                 name="odometry_node",
                 output="screen",
-                remappings=[("pointcloud_topic", LaunchConfiguration("topic"))],
+                remappings=[("pointcloud_topic", LaunchConfiguration("pointcloud_topic")),("imu_topic", LaunchConfiguration("imu_topic")),("wheelspeed_topic", LaunchConfiguration("wheelspeed_topic"))],
                 parameters=[
                     {
                         "odom_frame": LaunchConfiguration("odom_frame"),
@@ -63,8 +66,8 @@ def generate_launch_description():
                         "min_range": LaunchConfiguration("min_range"),
                         "deskew": LaunchConfiguration("deskew"),
                         #  "voxel_size": LaunchConfiguration("voxel_size"),
-                        "max_points_per_voxel": 20,
-                        "initial_threshold": 2.0,
+                        "max_points_per_voxel": 5,
+                        "initial_threshold": 5.0,
                         "min_motion_th": 0.1,
                     }
                 ],

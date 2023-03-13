@@ -41,6 +41,8 @@
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "tf2_ros/transform_broadcaster.h"
+#include <tf2/utils.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 namespace kiss_icp_ros {
 
@@ -68,6 +70,12 @@ OdometryServer::OdometryServer() : rclcpp::Node("odometry_node") {
     pointcloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
         "pointcloud_topic", rclcpp::SensorDataQoS(),
         std::bind(&OdometryServer::RegisterFrame, this, std::placeholders::_1));
+    imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+        "imu_topic", rclcpp::SensorDataQoS(),
+        std::bind(&OdometryServer::ImuHandler, this, std::placeholders::_1));
+    wheelspeed_sub_ = create_subscription<raptor_dbw_msgs::msg::WheelSpeedReport>(
+        "wheelspeed_topic", rclcpp::SensorDataQoS(),
+        std::bind(&OdometryServer::WheelSpeedHandler, this, std::placeholders::_1));
 
     // Intialize publishers
     rclcpp::QoS qos(rclcpp::KeepLast{queue_size_});
@@ -104,9 +112,117 @@ OdometryServer::OdometryServer() : rclcpp::Node("odometry_node") {
     RCLCPP_INFO(this->get_logger(), "KISS-ICP ROS2 odometry node initialized");
 }
 
+void OdometryServer::ImuIntegration(const sensor_msgs::msg::Imu &msg){
+    double timestamps = static_cast<double>(msg.header.stamp.sec) + static_cast<double>(msg.header.stamp.nanosec) / 1e9;
+    if(is_firstcall){
+        imu_last_update = timestamps;
+        is_firstcall = false;
+        Eigen::Vector3d temp_acc(0.0, 0.0, -9.81);
+        Eigen::Vector3d temp_gyro(0.0,0.0,0.0);
+        avg_acc = temp_acc;
+        avg_gyro = temp_gyro;
+    }else{
+        double dt = timestamps - imu_last_update;
+        // if(dt>0.02){ TODO:: no update when IMU time step is jumping 
+        //      odometry_.imu_initial_guess_updated = false;
+        // }
+        imu_last_update = timestamps;
+        if(timestamps>odometry_.initial_guess_update_time){
+            if(!odometry_.imu_initial_guess_updated){
+                odometry_.imu_initial_guess = Sophus::SE3d();
+                odometry_.imu_initial_guess_updated = true;
+            }else{
+                Eigen::Vector3d acc(msg.linear_acceleration.x, -msg.linear_acceleration.y, -msg.linear_acceleration.z);
+                Eigen::Vector3d gyro(msg.angular_velocity.x, -msg.angular_velocity.y, -msg.angular_velocity.z);
+                
+                Eigen::Vector3d delta_t = (gyro - avg_gyro)* dt;
+                Eigen::Vector3d delta_v = (acc - avg_acc) * dt;
+                Eigen::Vector3d delta_p;
+                
+                const auto pose = odometry_.poses().back();
+
+                // Convert from Eigen to ROS types
+                const Eigen::Quaterniond q_current = pose.unit_quaternion();
+
+                tf2::Quaternion q(
+                     q_current.x(),
+                     q_current.y(),
+                     q_current.z(),
+                     q_current.w());
+
+                tf2::Matrix3x3 m(q);
+                Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+                for (int i = 0; i < 3; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        R(i,j) = m[i][j];
+                    }
+                }
+                double roll, pitch, yaw;
+                m.getRPY(roll, pitch, yaw);
+
+                // Sophus::SO3d delta_R = Sophus::SO3d::exp(delta_t);
+                double delta_roll,delta_pitch,delta_yaw;
+                // delta_roll = m_velocity_x*(sin(pitch)*tan(roll)*sin(yaw)+cos(pitch)*tan(roll)*cos(yaw))*dt;
+                // delta_pitch = m_velocity_x*(sin(roll)*sin(pitch)*cos(yaw)-cos(roll)*sin(yaw))/cos(pitch)*dt;
+                // delta_yaw =  m_velocity_x*(sin(roll)*cos(yaw)/cos(pitch)+cos(roll)*sin(yaw)/cos(pitch))*dt;
+
+                delta_roll = delta_t(0)*dt;
+                delta_pitch = delta_t(1)*dt;
+                delta_yaw = delta_t(2)*dt;
+                
+
+                Eigen::AngleAxisd rotation_vector(delta_roll, Eigen::Vector3d::UnitX());
+                rotation_vector = Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()) * rotation_vector;
+                rotation_vector = Eigen::AngleAxisd(delta_yaw, Eigen::Vector3d::UnitZ()) * rotation_vector;
+
+                // Convert the AngleAxisd object to a 3x3 rotation matrix
+                Eigen::Matrix3d delta_R = rotation_vector.toRotationMatrix();
+
+                R = R * delta_R.matrix();
+                tf2::Matrix3x3 R_after_;
+                for (int i = 0; i < 3; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        R_after_[i][j] = R(i,j);
+                    }
+                }
+                double roll_after, pitch_after, yaw_after;
+                R_after_.getRPY(roll_after, pitch_after, yaw_after);
+
+                delta_p.setZero();
+                // delta_p(0) = (m_velocity_x * dt) * cos((yaw+yaw_after)/2.0);
+                // delta_p(1) = (m_velocity_x * dt) * -sin((yaw+yaw_after)/2.0);
+                // delta_p(2) = 0.0;
+                delta_p(0) = m_velocity_x*cos((yaw+yaw_after)/2.0)*cos((pitch+pitch_after)/2.0)*dt;
+                delta_p(1) =-m_velocity_x*sin((yaw+yaw_after)/2.0)*cos((pitch+pitch_after)/2.0)*dt;
+                delta_p(2) = m_velocity_x*sin((pitch+pitch_after)/2.0)*dt;
+                
+
+                Sophus::SE3d delta_pose(delta_R, delta_p);
+
+                odometry_.imu_initial_guess  = odometry_.imu_initial_guess * delta_pose;
+                odometry_.initial_guess_update_time = imu_last_update;
+            }
+        }
+
+    }
+
+}
+
+void OdometryServer::WheelSpeedHandler(const raptor_dbw_msgs::msg::WheelSpeedReport::SharedPtr msg_ptr){
+    m_velocity_x = (msg_ptr->front_right + msg_ptr->front_left) / 2 * 0.277778 * 0.9826;
+}
+
+
+void OdometryServer::ImuHandler(const sensor_msgs::msg::Imu::SharedPtr msg_ptr) {
+    if(!is_points) return;
+    const sensor_msgs::msg::Imu &msg = *msg_ptr;
+    ImuIntegration(msg);
+}
+
 void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::SharedPtr msg_ptr) {
     // ROS2::Foxy can't handle a callback to const MessageT&, so we hack it here
     // https://github.com/ros2/rclcpp/pull/1598
+    if(msg_ptr->data.size()==0)return;
     const sensor_msgs::msg::PointCloud2 &msg = *msg_ptr;
     const auto points = utils::PointCloud2ToEigen(msg);
     const auto timestamps = [&]() -> std::vector<double> {
@@ -169,6 +285,8 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::SharedPt
     auto local_map_header = msg.header;
     local_map_header.frame_id = odom_frame_;
     map_publisher_->publish(utils::EigenToPointCloud2(odometry_.LocalMap(), local_map_header));
+    is_points = true;
+
 }
 }  // namespace kiss_icp_ros
 

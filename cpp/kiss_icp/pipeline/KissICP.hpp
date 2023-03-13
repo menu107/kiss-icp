@@ -69,7 +69,11 @@ public:
     Vector3dVectorTuple Voxelize(const std::vector<Eigen::Vector3d> &frame) const;
     double GetAdaptiveThreshold();
     Sophus::SE3d GetPredictionModel() const;
+    Sophus::SE3d GetPredictionModelwithIMU();
     bool HasMoved();
+    Sophus::SE3d imu_initial_guess;
+    double initial_guess_update_time;
+    bool imu_initial_guess_updated = false;
 
 public:
     // Extra C++ API to facilitate ROS debugging
